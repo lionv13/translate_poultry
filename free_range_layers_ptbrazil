@@ -1,0 +1,760 @@
+from selenium import webdriver
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait, Select
+from selenium.common.exceptions import TimeoutException, StaleElementReferenceException
+import docx
+from docx.table import Table
+import time
+import re
+import json
+
+
+# =============================================================
+# ------------------ Configuration ----------------------------
+# =============================================================
+
+username_http = 'klant'
+password_http = 'klant'
+
+username_form = 'lionv13@hotmail.com'
+password_form = 'kuwfi3-pAwzeh-qunbax'
+
+file_path = "/Users/gast/Documents/biocheck/trabajos/2026/Junio/translations/surveys/Free range Layer_PT_Brasil_ V2.0.docx"
+questionnaire_url = "https://apitest.biocheckgent.com/en/questionnaires/free-range-layers/edit/questionnaire"
+
+driver = webdriver.Chrome()
+
+
+# =============================================================
+# ------------------ Login ------------------------------------
+# =============================================================
+
+def inloggen():
+    url = f"https://{username_http}:{password_http}@apitest.biocheckgent.com/en/user/login?destination=/en/dashboard"
+    driver.get(url)
+
+    try:
+        name_input = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.ID, "edit-name"))
+        )
+        name_input.clear()
+        name_input.send_keys(username_form)
+
+        pass_input = driver.find_element(By.ID, "edit-pass")
+        pass_input.clear()
+        pass_input.send_keys(password_form, Keys.RETURN)
+
+        print("✅ Login completo.")
+
+    except TimeoutException:
+        print("❌ No se encontró el formulario de login.")
+
+
+# =============================================================
+# ------------------ Text helpers -----------------------------
+# =============================================================
+
+def is_instruction_text(text):
+    if not text:
+        return True
+
+    cleaned = text.strip()
+
+    skip_texts = {
+        "Selecione uma opção",
+        "Selecione uma opção.",
+        "Marque todas as opções aplicáveis",
+        "Marque todas as opções aplicáveis.",
+        "Mark all applicable options",
+        "Mark all applicable options.",
+        "Select one option",
+        "Select one option.",
+        "Check any that apply",
+        "Check any that apply."
+    }
+
+    return cleaned in skip_texts
+
+
+def is_checkbox_instruction_question(question_text):
+    if not question_text:
+        return False
+
+    cleaned = question_text.strip().lower()
+
+    return cleaned in {
+        "marque todas as opções aplicáveis",
+        "marque todas as opções aplicáveis.",
+        "check any that apply",
+        "check any that apply."
+    }
+
+
+def clean_question_text(question_text):
+    return re.sub(
+        r'^(\d+[a-zA-Z]?|[IVXLCDM]+)\.\s*',
+        '',
+        question_text or ''
+    ).strip()
+
+
+def set_text_input_value(driver, field, value, label="field"):
+    """Set a normal text input reliably, even when Selenium clear()/send_keys() fails."""
+    value = str(value or "")
+    try:
+        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", field)
+        driver.execute_script(
+            """
+            const el = arguments[0];
+            const value = arguments[1];
+            el.focus();
+            el.value = value;
+            el.setAttribute('value', value);
+            el.dispatchEvent(new Event('input', {bubbles: true}));
+            el.dispatchEvent(new Event('change', {bubbles: true}));
+            el.blur();
+            """,
+            field,
+            value
+        )
+        print(f"✅ Set {label}: {value}")
+        return True
+    except Exception as e:
+        print(f"⚠️ Could not set {label}: {e}")
+        return False
+
+
+# =============================================================
+# ------------------ CKEditor Helper --------------------------
+# =============================================================
+
+def fill_ckeditor5_field(driver, field_id, text, label="", timeout=10):
+    try:
+        editor_div = WebDriverWait(driver, timeout).until(
+            EC.presence_of_element_located(
+                (By.CSS_SELECTOR, f"#{field_id} + div.ck-editor div.ck-editor__editable")
+            )
+        )
+
+        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", editor_div)
+        driver.execute_script("arguments[0].focus();", editor_div)
+
+        escaped_text = json.dumps(text or "")
+
+        success = driver.execute_script(f"""
+            let textarea = document.getElementById("{field_id}");
+            if (!textarea) return false;
+
+            let wrapper = textarea.closest(".form-item");
+            if (!wrapper) return false;
+
+            let editable = wrapper.querySelector("div.ck-editor__editable");
+            if (!editable) return false;
+
+            let editorInstance =
+                editable.ckeditorInstance ||
+                editable._ckeditorInstance ||
+                editable._ckeditor5_instance;
+
+            if (editorInstance) {{
+                editorInstance.setData({escaped_text});
+                return true;
+            }}
+
+            editable.innerHTML = {escaped_text};
+            editable.dispatchEvent(new Event("input", {{ bubbles: true }}));
+            editable.dispatchEvent(new Event("change", {{ bubbles: true }}));
+            return true;
+        """)
+
+        if success:
+            print(f"✅ Successfully set '{label}'.")
+        else:
+            print(f"⚠️ Could not set CKEditor field '{label}'.")
+
+    except Exception as e:
+        print(f"⚠️ CKEditor failed for '{label}': {e}")
+
+
+# =============================================================
+# ------------------ Question identifier ----------------------
+# =============================================================
+
+def fill_question_identifier(driver, question_number):
+    """
+    Fill 'Question identifier (all languages)' with the Word question number.
+    This is only called for checkbox instruction questions such as 7b, 8b, 10b.
+
+    Uses JavaScript because this field can be required/managed by Drupal and
+    sometimes Selenium clear()/send_keys() fails even when the element exists.
+    """
+    if not question_number:
+        print("⚠️ No question number available for identifier.")
+        return
+
+    try:
+        # Preferred selector from the HTML:
+        # <input id="edit-identifier-0-value" name="identifier[0][value]" ...>
+        field = WebDriverWait(driver, 5).until(
+            EC.presence_of_element_located((By.ID, "edit-identifier-0-value"))
+        )
+
+        driver.execute_script(
+            "arguments[0].scrollIntoView({block:'center'});",
+            field
+        )
+
+        value = str(question_number)
+
+        # JS is more reliable than field.clear()/send_keys() for Drupal fields.
+        driver.execute_script(
+            """
+            const el = arguments[0];
+            const value = arguments[1];
+            el.focus();
+            el.value = value;
+            el.setAttribute('value', value);
+            el.dispatchEvent(new Event('input', {bubbles: true}));
+            el.dispatchEvent(new Event('change', {bubbles: true}));
+            el.blur();
+            """,
+            field,
+            value
+        )
+
+        print(f"🔢 Set question identifier: {question_number}")
+
+    except Exception as e:
+        print(f"⚠️ Could not set question identifier {question_number}: {e}")
+
+# =============================================================
+# ------------------ Matrix Question Helper -------------------
+# =============================================================
+
+def fill_matrix_question(driver, question_data):
+    try:
+        try:
+            select_elem = WebDriverWait(driver, 3).until(
+                EC.presence_of_element_located((By.ID, "edit-type"))
+            )
+            select = Select(select_elem)
+
+            current_value = select.first_selected_option.text.strip().lower()
+
+            if "matrix" not in current_value:
+                select.select_by_visible_text("Matrix")
+                print("✅ Set question type to Matrix")
+
+        except TimeoutException:
+            print("ℹ️ Matrix type selector not found, assuming already set.")
+
+        WebDriverWait(driver, 5).until(
+            EC.presence_of_element_located(
+                (By.CSS_SELECTOR, '#edit-field-options-0-value')
+            )
+        )
+
+        print("✅ Matrix inputs loaded.")
+
+    except Exception as e:
+        print(f"⚠️ Matrix structure not found: {e}")
+        return
+
+    for i, option in enumerate(question_data.get("answers", [])):
+        try:
+            option_input = WebDriverWait(driver, 5).until(
+                EC.presence_of_element_located(
+                    (By.ID, f'edit-field-options-{i}-value')
+                )
+            )
+            set_text_input_value(
+                driver,
+                option_input,
+                option,
+                label=f"matrix option {i + 1}"
+            )
+            print(f"✅ Set matrix option {i + 1}: {option}")
+
+        except Exception as e:
+            print(f"⚠️ Could not set matrix option {i + 1}: {e}")
+
+    for j, statement in enumerate(question_data.get("statements", [])):
+        try:
+            statement_input = WebDriverWait(driver, 5).until(
+                EC.presence_of_element_located(
+                    (By.ID, f'edit-field-statements-{j}-value')
+                )
+            )
+            set_text_input_value(
+                driver,
+                statement_input,
+                statement,
+                label=f"statement {j + 1}"
+            )
+            print(f"✅ Set statement {j + 1}: {statement}")
+
+        except Exception as e:
+            print(f"⚠️ Could not set statement {j + 1}: {e}")
+
+
+# =============================================================
+# ------------------ Extract Data from Word -------------------
+# =============================================================
+
+def extract_data(file_path):
+    CATEGORY_PATTERN = r'^(~|[A-M])\.\s*(.*)'
+    NUMERIC_PATTERN = r'^(\d+[a-zA-Z]?)\.\s*(.*)'
+    ROMAN_PATTERN = r'^([IVXLCDM]+)\.\s*(.*)'
+    BULLET_PATTERN = r'^[\u25A1\u25CB•▪○]+\s*'
+    HELP_TEXT_MARKERS = [ "Se", "Uma", "Duas","Mais", "A", "*A", "All-in-all-out", "Um","Enterrado", "Os", "Por", 
+    "Oum", "Ou", "Tem","Telas", "Propriedade", "Profissional", "Algumas","Compartimento", "Esta", "Isto", 
+    "Veículos","Separação", "Visitantes"]
+    HELP_TEXT_COLOR = (118, 113, 113)
+    REDIRECT_MSG_PATTERN = r'(Se.*?v[aá] para a pergunta [IVXLCDM0-9]+[a-zA-Z]?)'
+
+    doc = docx.Document(file_path)
+
+    blocks = []
+    for element in doc.element.body:
+        if element.tag.endswith('}p'):
+            blocks.append(docx.text.paragraph.Paragraph(element, doc))
+        elif element.tag.endswith('}tbl'):
+            blocks.append(docx.table.Table(element, doc))
+
+    categories = []
+    questions = []
+
+    current_category = None
+    current_question = None
+    current_number = None
+    current_answers = []
+    current_help_text = ""
+    current_redirect = ""
+
+    def save_current_question():
+        nonlocal current_question, current_number, current_answers
+        nonlocal current_help_text, current_redirect, questions
+
+        if current_question:
+            questions.append({
+                "question": current_question.strip(),
+                "answers": current_answers,
+                "redirect": current_redirect.strip(),
+                "help_text": current_help_text.strip(),
+                "number": current_number
+            })
+
+        current_question = None
+        current_number = None
+        current_answers = []
+        current_help_text = ""
+        current_redirect = ""
+
+    def save_current_category():
+        nonlocal current_category, questions, categories
+
+        if current_category is not None:
+            categories.append({
+                "category_name": current_category,
+                "questions": questions
+            })
+
+        questions = []
+
+    for block in blocks:
+        if isinstance(block, docx.text.paragraph.Paragraph):
+            text = block.text.strip().replace("(obrigatório)", "").strip()
+
+            if not text:
+                continue
+
+            font_size = None
+            if block.runs and block.runs[0].font.size:
+                font_size = block.runs[0].font.size.pt
+
+            category_match = re.match(CATEGORY_PATTERN, text)
+            question_match = re.match(NUMERIC_PATTERN, text) or re.match(ROMAN_PATTERN, text)
+
+            if category_match and font_size and font_size >= 16 and "glossario" not in text.lower():
+                save_current_question()
+                save_current_category()
+                current_category = category_match.group(2).strip()
+                continue
+
+            if question_match and current_category is not None:
+                save_current_question()
+                current_number = question_match.group(1).strip()
+                current_question = question_match.group(2).strip()
+                continue
+
+            if is_instruction_text(text):
+                continue
+
+            if block.style.name.startswith("List") or re.match(BULLET_PATTERN, text):
+                answer_text = re.sub(BULLET_PATTERN, "", text).strip()
+
+                if is_instruction_text(answer_text):
+                    continue
+
+                if answer_text:
+                    current_answers.append(answer_text)
+
+                continue
+
+            if re.search(REDIRECT_MSG_PATTERN, text):
+                current_redirect += " " + text
+                continue
+
+            for run in block.runs:
+                if run.font.color and run.font.color.rgb:
+                    color = (
+                        run.font.color.rgb[0],
+                        run.font.color.rgb[1],
+                        run.font.color.rgb[2]
+                    )
+            
+                    if (
+                        color == HELP_TEXT_COLOR
+                        or any(marker in run.text for marker in HELP_TEXT_MARKERS)
+                    ):
+                        current_help_text += " " + text
+                        break
+
+        elif isinstance(block, Table) and current_question:
+            headers = []
+            statements = []
+
+            for i, row in enumerate(block.rows):
+                cells = [cell.text.strip() for cell in row.cells]
+
+                if i == 0:
+                    headers = [
+                        c for c in cells
+                        if c and not is_instruction_text(c)
+                    ]
+                else:
+                    if any(cells):
+                        statements.append(" - ".join(cells).strip())
+
+            if headers and statements:
+                questions.append({
+                    "question": current_question.strip(),
+                    "answers": headers,
+                    "statements": statements,
+                    "redirect": current_redirect.strip(),
+                    "help_text": current_help_text.strip(),
+                    "number": current_number
+                })
+
+                current_question = None
+                current_number = None
+                current_answers = []
+                current_help_text = ""
+                current_redirect = ""
+
+    save_current_question()
+
+    if current_category is not None and questions:
+        categories.append({
+            "category_name": current_category,
+            "questions": questions
+        })
+
+    return categories
+
+
+# =============================================================
+# ------------------ Process Items ----------------------------
+# =============================================================
+
+def process_items(driver, categories):
+    print("🔧 Starting to process items...")
+
+    all_category_names = [cat["category_name"] for cat in categories]
+    all_questions = [q for cat in categories for q in cat["questions"]]
+
+    item_index = 0
+    question_index = 0
+    category_index = 0
+
+    total_items = len(all_category_names) + len(all_questions)
+
+    while item_index < total_items:
+        try:
+            print(f"\n🔍 Processing item {item_index + 1}...")
+
+            translate_link = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable(
+                    (
+                        By.XPATH,
+                        f"(//tr[td]//a[text()='Translate'])[{item_index + 1}]"
+                    )
+                )
+            )
+
+            try:
+                translate_link.click()
+            except StaleElementReferenceException:
+                translate_link = WebDriverWait(driver, 5).until(
+                    EC.element_to_be_clickable(
+                        (
+                            By.XPATH,
+                            f"(//tr[td]//a[text()='Translate'])[{item_index + 1}]"
+                        )
+                    )
+                )
+                translate_link.click()
+
+            row = WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located(
+                    (
+                        By.XPATH,
+                        "//tr[td//text()[contains(., 'Portuguese')]]"
+                    )
+                )
+            )
+
+            edit_links = row.find_elements(By.XPATH, ".//a[contains(@href, '/edit')]")
+
+            if edit_links:
+                edit_links[0].click()
+                print("✏️ Clicked 'Edit'")
+            else:
+                add_links = row.find_elements(By.XPATH, ".//a[contains(@href, '/add')]")
+
+                if add_links:
+                    add_links[0].click()
+                    print("➕ Clicked 'Add'")
+                else:
+                    print("⚠️ No edit or add link found, skipping item")
+                    item_index += 1
+                    driver.get(questionnaire_url)
+                    continue
+
+            WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.TAG_NAME, "form"))
+            )
+
+            labels = driver.find_elements(By.XPATH, "//label")
+
+            # Each edit/add page corresponds to ONE item only: either one category
+            # or one question. After filling that item, break out of the label loop
+            # so the script does not accidentally consume the next Word question
+            # on the same page before clicking Save.
+            item_filled = False
+
+            for label in labels:
+                label_text = label.text.strip()
+                input_id = label.get_attribute("for")
+
+                if not input_id:
+                    continue
+
+                if "Category name" in label_text and category_index < len(all_category_names):
+                    field = driver.find_element(By.ID, input_id)
+                    set_text_input_value(
+                        driver,
+                        field,
+                        all_category_names[category_index],
+                        label="category"
+                    )
+
+                    print(f"🏷️ Set category: {all_category_names[category_index]}")
+                    category_index += 1
+                    item_filled = True
+                    break
+
+                label_text_lower = label_text.lower()
+
+                # IMPORTANT: Do not treat "Question identifier (all languages)" as the
+                # translatable Question field. It is a separate field.
+                is_main_question_field = (
+                    "question" in label_text_lower
+                    and "identifier" not in label_text_lower
+                    and "sequence" not in label_text_lower
+                )
+
+                if is_main_question_field and question_index < len(all_questions):
+                    current = all_questions[question_index]
+                    question_text = clean_question_text(current["question"])
+
+                    field = driver.find_element(By.ID, input_id)
+
+                    # Only checkbox instruction questions like 7b, 8b, 10b need the
+                    # Question identifier field filled. For normal questions, do not touch it.
+                    if is_checkbox_instruction_question(question_text):
+                        fill_question_identifier(driver, current.get("number"))
+                        set_text_input_value(
+                            driver,
+                            field,
+                            question_text,
+                            label=f"checkbox question text {current.get('number')}"
+                        )
+                        print(
+                            f"☑️ Checkbox instruction detected for question {current['number']}. "
+                            "Filled translated question text and identifier."
+                        )
+                    else:
+                        set_text_input_value(
+                            driver,
+                            field,
+                            question_text,
+                            label="question text"
+                        )
+                        print(f"❓ Set question: {question_text}")
+
+                    if current.get("statements"):
+                        print("📐 Matrix question detected.")
+                        fill_matrix_question(driver, current)
+                    else:
+                        print("🅰️ Standard question detected. Filling answers...")
+
+                        answers = [
+                            a.strip()
+                            for a in current.get("answers", [])
+                            if not is_instruction_text(a.strip())
+                        ]
+
+                        print("Answers extracted:")
+                        for idx, ans in enumerate(answers):
+                            print(f"  {idx}: {ans}")
+
+                        answer_fields = driver.find_elements(
+                            By.CSS_SELECTOR,
+                            'input[id^="edit-field-potential-answers-"][id$="-value"]'
+                        )
+
+                        available_count = len(answer_fields)
+
+                        if len(answers) > available_count:
+                            print(
+                                f"⚠️ Word contains {len(answers)} answers "
+                                f"but form only contains {available_count} fields."
+                            )
+                            print("⚠️ Missing answers:")
+                            for missing in answers[available_count:]:
+                                print(f"   - {missing}")
+
+                        for i, ans in enumerate(answers[:available_count]):
+                            try:
+                                ans_field = WebDriverWait(driver, 10).until(
+                                    EC.presence_of_element_located(
+                                        (
+                                            By.ID,
+                                            f"edit-field-potential-answers-{i}-value"
+                                        )
+                                    )
+                                )
+
+                                driver.execute_script(
+                                    "arguments[0].scrollIntoView({block:'center'});",
+                                    ans_field
+                                )
+
+                                set_text_input_value(
+                                    driver,
+                                    ans_field,
+                                    ans,
+                                    label=f"answer {i + 1}"
+                                )
+
+                                print(f"✅ Answer {i + 1}: {ans}")
+
+                            except Exception as e:
+                                print(
+                                    f"⚠️ Could not set answer {i + 1}: "
+                                    f"{ans} -> {e}"
+                                )
+
+                    if current.get("help_text"):
+                        fill_ckeditor5_field(
+                            driver,
+                            "edit-help-0-value",
+                            current["help_text"],
+                            label="Help text"
+                        )
+                    else:
+                        fill_ckeditor5_field(
+                            driver,
+                            "edit-help-0-value",
+                            "",
+                            label="Help text cleared"
+                        )
+
+                    if current.get("redirect"):
+                        fill_ckeditor5_field(
+                            driver,
+                            "edit-conditional-help-0-value",
+                            current["redirect"],
+                            label="Redirect"
+                        )
+                    else:
+                        fill_ckeditor5_field(
+                            driver,
+                            "edit-conditional-help-0-value",
+                            "",
+                            label="Redirect cleared"
+                        )
+
+                    question_index += 1
+                    item_filled = True
+                    break
+
+            save_button = WebDriverWait(driver, 20).until(
+                EC.element_to_be_clickable((By.ID, "edit-submit"))
+            )
+
+            driver.execute_script(
+                "arguments[0].scrollIntoView({block:'center'});",
+                save_button
+            )
+
+            time.sleep(1)
+            driver.execute_script("arguments[0].click();", save_button)
+
+            print("💾 Clicked Save")
+
+            item_index += 1
+            time.sleep(2)
+            driver.get(questionnaire_url)
+
+        except Exception as e:
+            print(f"❌ Error at item {item_index + 1}: {e}")
+            item_index += 1
+
+            try:
+                driver.get(questionnaire_url)
+                time.sleep(2)
+            except Exception:
+                pass
+
+            continue
+
+
+# =============================================================
+# ------------------ Run Script -------------------------------
+# =============================================================
+
+if __name__ == "__main__":
+    inloggen()
+    driver.get(questionnaire_url)
+
+    categories = extract_data(file_path)
+
+    print("✅ Ready to process translations.")
+    print("Total categories loaded:", len(categories))
+    print("Total questions loaded:", sum(len(cat["questions"]) for cat in categories))
+
+    for cat in categories:
+        for q in cat["questions"]:
+            if q["number"] in ["7a", "7b", "8a", "8b", "10a", "10b", "92a", "92b"]:
+                print("\n--------------------------------")
+                print("Question:", q["number"])
+                print("Text:", q["question"])
+                print("Answers:", q["answers"])
+                print("--------------------------------")
+
+    process_items(driver, categories)
+    print("🎉 Finished processing all translations.")
