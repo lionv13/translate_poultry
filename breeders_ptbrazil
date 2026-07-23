@@ -51,7 +51,15 @@ def inloggen():
     except TimeoutException:
         print("❌ No se encontró el formulario de login.")
 
+# ------------------------------------ Login Function not test ------------------------------------ #
+#def credentials():
+    #username='lionv13@hotmail.com'
+    #password='kuwfi3-pAwzeh-qunbax'
+    #driver.find_element("id", "edit-name").send_keys(username, Keys.TAB, password, Keys.RETURN)
 
+#def inloggen():
+    #driver.get('https://biocheckgent.com/en/user/login?destination=/en/dashboard')
+    #credentials()
 # =============================================================
 # ------------------ Text helpers -----------------------------
 # =============================================================
