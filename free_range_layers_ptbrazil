@@ -317,10 +317,28 @@ def extract_data(file_path):
     ROMAN_PATTERN = r'^([IVXLCDM]+)\.\s*(.*)'
     BULLET_PATTERN = r'^[\u25A1\u25CB•▪○]+\s*'
     HELP_TEXT_MARKERS = [ "Se", "Uma", "Duas","Mais", "A", "*A", "All-in-all-out", "Um","Enterrado", "Os", "Por", 
-    "Oum", "Ou", "Tem","Telas", "Propriedade", "Profissional", "Algumas","Compartimento", "Esta", "Isto", 
+    "Oum", "Ou", "Tem","Telas", "Propriedade", "Enterradas", "Profissional", "Algumas","Compartimento", "Esta", "Isto", 
     "Veículos","Separação", "Visitantes"]
     HELP_TEXT_COLOR = (118, 113, 113)
-    REDIRECT_MSG_PATTERN = r'(Se.*?v[aá] para a pergunta [IVXLCDM0-9]+[a-zA-Z]?)'
+    REDIRECT_MSG_PATTERN = re.compile(
+        r'('
+        # Skip a question
+        r'\b(?:pule|ignore|salte)\s+(?:a\s+)?pergunta\s+[IVXLCDM0-9]+[a-zA-Z]?'
+        r'|'
+        # Go to another question
+        r'\bv[aá]\s+(?:diretamente\s+)?(?:para\s+a|à)\s+pergunta\s+[IVXLCDM0-9]+[a-zA-Z]?'
+        r'|'
+        # Go to the end of the questionnaire
+        r'\bv[aá]\s+(?:diretamente\s+)?para\s+o\s+(?:final|fim)\s+(?:deste|desse|do)\s+question[aá]rio'
+        r'|'
+        # Finish/end questionnaire or survey
+        r'\b(?:termine|encerre|finalize)\s+(?:este|esse|o)?\s*(?:question[aá]rio|pesquisa)'
+        r'|'
+        # Survey is completed
+        r'\ba\s+pesquisa\s+[ée]\s+conclu[ií]da\b'
+        r')',
+        re.IGNORECASE
+    )
 
     doc = docx.Document(file_path)
 
