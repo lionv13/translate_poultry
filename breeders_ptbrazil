@@ -18,8 +18,8 @@ import json
 username_http = 'klant'
 password_http = 'klant'
 
-username_form = 'lionv13@hotmail.com'
-password_form = 'kuwfi3-pAwzeh-qunbax'
+username_form = ''
+password_form = ''
 
 file_path = "/Users/gast/Documents/biocheck/trabajos/2026/Junio/translations/surveys/Breeders_PT_Brazil_V2.0.docx"
 questionnaire_url = "https://apitest.biocheckgent.com/en/questionnaires/breeders/edit/questionnaire"
@@ -320,7 +320,27 @@ def extract_data(file_path):
     "Oum", "Ou", "Tem","Telas", "Propriedade", "Profissional", "Algumas","Compartimento", "Esta", "Isto", 
     "Veículos","Separação", "Visitantes"]
     HELP_TEXT_COLOR = (118, 113, 113)
-    REDIRECT_MSG_PATTERN = r'(Se.*?v[aá] para a pergunta [IVXLCDM0-9]+[a-zA-Z]?)'
+    REDIRECT_MSG_PATTERN = re.compile(
+        r'('
+        # Skip a question
+        r'\b(?:pule|ignore|salte)\s+(?:a\s+)?pergunta\s+[IVXLCDM0-9]+[a-zA-Z]?'
+        r'|'
+        # Go to another question
+        r'\bv[aá]\s+(?:diretamente\s+)?(?:para\s+a|à)\s+pergunta\s+[IVXLCDM0-9]+[a-zA-Z]?'
+        r'|'
+        r'\bv[aá]\s+(?:diretamente\s+)?(?:para\s+a|à)\s+(?:pergunta|quest(?:[ãa]o|ões))\s+[IVXLCDM0-9]+[a-zA-Z]?'
+        r'|'
+        # Go to the end of the questionnaire
+        r'\bv[aá]\s+(?:diretamente\s+)?para\s+o\s+(?:final|fim)\s+(?:deste|desse|do)\s+question[aá]rio'
+        r'|'
+        # Finish/end questionnaire or survey
+        r'\b(?:termine|encerre|finalize)\s+(?:este|esse|o)?\s*(?:question[aá]rio|pesquisa)'
+        r'|'
+        # Survey is completed
+        r'\ba\s+pesquisa\s+[ée]\s+conclu[ií]da\b'
+        r')',
+        re.IGNORECASE
+    )
 
     doc = docx.Document(file_path)
 
