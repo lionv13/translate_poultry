@@ -18,8 +18,8 @@ import json
 username_http = 'klant'
 password_http = 'klant'
 
-username_form = 'lionv13@hotmail.com'
-password_form = 'kuwfi3-pAwzeh-qunbax'
+username_form = ''
+password_form = ''
 
 file_path = "/Users/gast/Documents/biocheck/trabajos/2026/Junio/translations/surveys/Free range Layer_PT_Brasil_ V2.0.docx"
 questionnaire_url = "https://apitest.biocheckgent.com/en/questionnaires/free-range-layers/edit/questionnaire"
